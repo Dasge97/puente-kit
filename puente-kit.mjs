@@ -4,10 +4,11 @@
 // Uso:
 //   node puente-kit.mjs           Arranca y vigila el Puente (lo que lanza el Kit).
 //   node puente-kit.mjs pair      Muestra un código para emparejar la extensión.
+//   node puente-kit.mjs pair --kit  Pide el código y lo enseña en la tarjeta del Kit.
 //   node puente-kit.mjs status    Estado del Puente.
 
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, renameSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,6 +16,8 @@ const DIR = path.dirname(fileURLToPath(import.meta.url));
 const LOG = path.join(DIR, 'puente-kit.log');
 const ESTADO_RUTA = path.join(DIR, 'estado-ruta.txt');
 const RUTA_PUENTE = path.join(DIR, 'ruta-puente.txt');
+const CODIGO = path.join(DIR, 'codigo.json');
+const PID = path.join(DIR, 'puente-kit.pid');
 const INTERVALO_MS = 30_000;
 
 // bridge.mjs de claude-browser-eye-extension. Por defecto, el repositorio clonado al lado.
@@ -77,7 +80,70 @@ function consultarEstado(puente) {
   });
 }
 
+// Código de emparejamiento pendiente, si no ha caducado.
+function codigoVigente() {
+  try {
+    const datos = JSON.parse(readFileSync(CODIGO, 'utf8'));
+    if (Date.parse(datos.expiresAt) > Date.now()) return datos;
+  } catch {
+    return null;
+  }
+  rmSync(CODIGO, { force: true });
+  return null;
+}
+
+function horaLocal(iso) {
+  return new Date(iso).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+}
+
+// Traduce el estado del Puente al estado.json del Kit.
+function escribirSegunPuente(estado, arrancadoPor) {
+  const extension = !estado.paired ? 'Sin emparejar' : estado.extensionConnected ? 'Conectada' : 'Desconectada';
+  const indicadores = [
+    { etiqueta: 'Puerto', valor: String(estado.port) },
+    { etiqueta: 'Extensión', valor: extension },
+    { etiqueta: 'Clientes MCP', valor: String(estado.clients) },
+    { etiqueta: 'Tareas activas', valor: String(estado.tasks) },
+  ];
+  if (arrancadoPor) indicadores.push({ etiqueta: 'Arrancado por', valor: arrancadoPor });
+  const codigo = estado.extensionConnected ? null : codigoVigente();
+  if (estado.extensionConnected) rmSync(CODIGO, { force: true });
+  if (codigo) {
+    indicadores.unshift({ etiqueta: 'Código', valor: codigo.code });
+    escribirEstado(
+      'aviso',
+      `Código de emparejamiento: ${codigo.code} (caduca a las ${horaLocal(codigo.expiresAt)}). Escríbelo en el panel de la extensión.`,
+      indicadores,
+    );
+  } else if (!estado.paired) {
+    escribirEstado('aviso', 'Puente en marcha. Falta emparejar la extensión: pulsa «Código de emparejamiento».', indicadores);
+  } else if (!estado.extensionConnected) {
+    escribirEstado('aviso', 'Puente en marcha. La extensión no está conectada (¿Chrome cerrado?).', indicadores);
+  } else {
+    escribirEstado('ok', `Puente en marcha en el puerto ${estado.port}. Extensión conectada.`, indicadores);
+  }
+}
+
+// Una sola copia del servicio: si ya hay una viva, esta termina sin hacer nada.
+function tomarInstancia() {
+  try {
+    const pid = Number(readFileSync(PID, 'utf8'));
+    if (Number.isInteger(pid) && pid !== process.pid) {
+      process.kill(pid, 0);
+      return false;
+    }
+  } catch {
+    // Sin fichero o proceso muerto: se puede tomar.
+  }
+  writeFileSync(PID, String(process.pid));
+  return true;
+}
+
 async function vigilar() {
+  if (!tomarInstancia()) {
+    log('Ya hay otra copia del servicio en marcha. Esta termina.');
+    return;
+  }
   const puente = rutaPuente();
   let hijo = null;
   let ultimoCodigo = null;
@@ -121,26 +187,13 @@ async function vigilar() {
       return;
     }
     if (hijo) espera = 5_000;
-    const extension = !estado.paired ? 'Sin emparejar' : estado.extensionConnected ? 'Conectada' : 'Desconectada';
-    const indicadores = [
-      { etiqueta: 'Puerto', valor: String(estado.port) },
-      { etiqueta: 'Extensión', valor: extension },
-      { etiqueta: 'Clientes MCP', valor: String(estado.clients) },
-      { etiqueta: 'Tareas activas', valor: String(estado.tasks) },
-      { etiqueta: 'Arrancado por', valor: hijo ? 'Este servicio' : 'Otro proceso' },
-    ];
-    if (!estado.paired) {
-      escribirEstado('aviso', 'Puente en marcha. Falta emparejar la extensión: usa la acción «Código de emparejamiento».', indicadores);
-    } else if (!estado.extensionConnected) {
-      escribirEstado('aviso', 'Puente en marcha. La extensión no está conectada (¿Chrome cerrado?).', indicadores);
-    } else {
-      escribirEstado('ok', `Puente en marcha en el puerto ${estado.port}. Extensión conectada.`, indicadores);
-    }
+    escribirSegunPuente(estado, hijo ? 'Este servicio' : 'Otro proceso');
   };
 
   const terminar = () => {
     parando = true;
     hijo?.kill();
+    rmSync(PID, { force: true });
     escribirEstado('parado', 'Servicio detenido.');
     process.exit(0);
   };
@@ -150,6 +203,33 @@ async function vigilar() {
   log('Servicio iniciado.');
   await revisar();
   setInterval(() => void revisar(), INTERVALO_MS);
+  // Mientras haya un código pendiente se revisa a menudo, para quitarlo en cuanto se use.
+  setInterval(() => {
+    if (existsSync(CODIGO)) void revisar();
+  }, 3_000);
+}
+
+// Acción del Kit: pide el código y lo deja en la tarjeta del servicio.
+async function emparejarDesdeKit() {
+  const puente = rutaPuente();
+  const salida = await new Promise((resolve) => {
+    const proc = spawn(process.execPath, [puente, 'pair', '--json'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    let texto = '';
+    proc.stdout.on('data', (trozo) => (texto += trozo));
+    proc.once('error', () => resolve(null));
+    proc.once('exit', () => resolve(texto));
+  });
+  let codigo;
+  try {
+    codigo = JSON.parse(String(salida).trim().split('\n').pop());
+  } catch {
+    escribirEstado('error', 'No se pudo pedir el código de emparejamiento. ¿Está el Puente en marcha?');
+    process.stdout.write('No se pudo pedir el código.\n');
+    process.exit(1);
+  }
+  writeFileSync(CODIGO, JSON.stringify(codigo));
+  escribirSegunPuente(await consultarEstado(puente), null);
+  process.stdout.write(`Código: ${codigo.code}\n`);
 }
 
 function reenviar(argumentos) {
@@ -163,7 +243,8 @@ function reenviar(argumentos) {
 }
 
 const [orden] = process.argv.slice(2);
-if (orden === 'pair' || orden === 'status') reenviar([orden]);
+if (orden === 'pair' && process.argv.includes('--kit')) await emparejarDesdeKit();
+else if (orden === 'pair' || orden === 'status') reenviar([orden]);
 else if (orden === undefined) await vigilar();
 else {
   process.stderr.write('Uso: node puente-kit.mjs [pair|status]\n');

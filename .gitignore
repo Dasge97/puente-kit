@@ -2,3 +2,5 @@ estado-ruta.txt
 ruta-puente.txt
 *.log
 *.log.1
+codigo.json
+puente-kit.pid

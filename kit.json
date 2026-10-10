@@ -24,7 +24,7 @@
       {
         "id": "emparejar",
         "etiqueta": "Código de emparejamiento",
-        "comando": "cmd /c start \"Browser Eye\" cmd /k node \"{dir}/puente-kit.mjs\" pair"
+        "comando": "node \"{dir}/puente-kit.mjs\" pair --kit"
       }
     ]
   },

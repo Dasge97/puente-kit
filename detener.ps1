@@ -7,4 +7,5 @@ foreach ($padre in $servicio) {
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
   Stop-Process -Id $padre.ProcessId -Force
 }
+Remove-Item (Join-Path $PSScriptRoot "puente-kit.pid") -ErrorAction SilentlyContinue
 Write-Host "Detenido."
