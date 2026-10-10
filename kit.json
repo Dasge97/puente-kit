@@ -1,0 +1,35 @@
+{
+  "kit": 1,
+  "paquete": "puente-kit",
+  "requisitos": [
+    { "comando": "node", "texto": "Node.js 24 en el PATH" }
+  ],
+  "instalar": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{dir}/instalar-inicio.ps1\"",
+  "desinstalar": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{dir}/desinstalar-inicio.ps1\"",
+
+  "id": "puente-browser-eye",
+  "nombre": "Puente Browser Eye",
+  "descripcion": "Puente local que conecta los clientes MCP con la extensión Browser Eye de Chrome.",
+  "tipo": "demonio",
+  "proyecto": "{dir}",
+  "estado_ruta": "{dir}/estado-ruta.txt",
+  "comprobar": {
+    "proceso_contiene": "puente-kit.mjs"
+  },
+  "acciones": {
+    "arrancar": "wscript \"{dir}/iniciar-oculto.vbs\"",
+    "parar": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{dir}/detener.ps1\"",
+    "abrir": null,
+    "extra": [
+      {
+        "id": "emparejar",
+        "etiqueta": "Código de emparejamiento",
+        "comando": "cmd /c start \"Browser Eye\" cmd /k node \"{dir}/puente-kit.mjs\" pair"
+      }
+    ]
+  },
+  "registro": "{dir}/puente-kit.log",
+  "caducidad_minutos": 2,
+  "avisos": "caidas",
+  "ntfy": null
+}
