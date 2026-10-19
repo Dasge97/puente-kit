@@ -99,15 +99,19 @@ function horaLocal(iso) {
 // Traduce el estado del Puente al estado.json del Kit.
 function escribirSegunPuente(estado, arrancadoPor) {
   const extension = !estado.paired ? 'Sin emparejar' : estado.extensionConnected ? 'Conectada' : 'Desconectada';
+  const navegadores = Array.isArray(estado.browsers) ? estado.browsers.length : null;
   const indicadores = [
     { etiqueta: 'Puerto', valor: String(estado.port) },
     { etiqueta: 'Extensión', valor: extension },
     { etiqueta: 'Clientes MCP', valor: String(estado.clients) },
     { etiqueta: 'Tareas activas', valor: String(estado.tasks) },
   ];
+  if (navegadores !== null) indicadores.splice(2, 0, { etiqueta: 'Navegadores emparejados', valor: String(navegadores) });
   if (arrancadoPor) indicadores.push({ etiqueta: 'Arrancado por', valor: arrancadoPor });
-  const codigo = estado.extensionConnected ? null : codigoVigente();
-  if (estado.extensionConnected) rmSync(CODIGO, { force: true });
+  // El código se enseña aunque haya otro navegador conectado: puede ser justo el que se quiere añadir.
+  // Se quita cuando caduca o cuando el Puente dice que ya no queda ninguno pendiente (se usó).
+  if (estado.pairingCodePending === false) rmSync(CODIGO, { force: true });
+  const codigo = codigoVigente();
   if (codigo) {
     indicadores.unshift({ etiqueta: 'Código', valor: codigo.code });
     escribirEstado(
